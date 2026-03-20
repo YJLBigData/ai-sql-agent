@@ -1,0 +1,24 @@
+# 电商语义规则
+
+- 当前测试库是蒙牛电商业务演示数据，默认全部品牌均为 `蒙牛`，用户单独提“蒙牛”时不需要额外品牌过滤。
+- 门店域维度来自 `dim_store`：
+  - `channel_name`: 渠道
+  - `store_name`: 门店
+  - `region_name`: 大区
+  - `province_name` / `city_name`: 省市
+- 商品域维度优先来自明细事实：
+  - `fct_order_item.series_name` / `category_name` / `product_name`
+  - `fct_refund_item.series_name` / `category_name` / `product_name`
+- GMV 口径：
+  - 门店/渠道/区域类分析优先使用 `fct_order_main.payment_amount`
+  - 商品/系列/类目类分析优先使用 `fct_order_item.pay_amount`
+  - 默认限定 `pay_status = '已支付'`
+- 退款金额口径：
+  - 门店/渠道/区域类分析优先使用 `fct_refund_main.refund_amount`
+  - 商品/系列/类目类分析优先使用 `fct_refund_item.refund_amount`
+  - 默认限定 `refund_status = '退款成功'`
+- 退款率口径：
+  - 默认使用 `成功退款订单数 / 已支付订单数`
+  - 如果按渠道统计，最终结果粒度必须是一行一个 `channel_name`
+  - 如果按系列统计，最终结果粒度必须是一行一个 `series_name`
+- 当问题同时涉及订单与退款时，应先在同一最终维度上分别聚合，再做关联，避免金额和订单数被重复放大。

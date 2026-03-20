@@ -1,0 +1,22 @@
+# 库存规则
+
+- 库存主题默认基于两张事实表：
+  - `fct_inventory_snapshot`: 最新库存快照
+  - `fct_inventory_flow`: 入库/出库流水
+- 仓库维度字段来自 `dim_warehouse`
+  - `warehouse_name`: 仓库名称
+  - `warehouse_type`: 仓库类型
+  - `region_name` / `province_name` / `city_name`: 仓库地域
+- 库存量口径：
+  - `inventory_qty`: 账面库存量
+  - `available_qty`: 可用库存量
+  - `reserved_qty`: 预占库存量
+- 缺货率口径：
+  - `缺货 SKU 数 / 总 SKU 数`
+  - 总 SKU 数默认取 `COUNT(DISTINCT product_id)`
+  - 默认按最新快照统计
+  - 缺货定义为 `available_qty <= 0` 或 `stock_status = '缺货'`
+- 入库出库口径：
+  - 入库量基于 `direction = '入库'`
+  - 出库量基于 `direction = '出库'`
+  - 默认按 `flow_date` 时间范围统计
