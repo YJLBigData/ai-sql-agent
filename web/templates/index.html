@@ -123,7 +123,7 @@
 
         .form-grid {
             display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            grid-template-columns: repeat(6, minmax(0, 1fr));
             gap: 12px;
         }
 
@@ -582,15 +582,23 @@
         <section class="card">
             <div class="form-grid">
                 <div class="field">
+                    <label for="engine-mode">引擎模式</label>
+                    <select id="engine-mode"></select>
+                </div>
+                <div class="field">
                     <div class="field-head">
-                        <label for="provider">模型供应商</label>
+                        <label for="provider" id="provider-label">模型供应商</label>
                         <span id="config-chip" class="config-chip">当前配置</span>
                     </div>
                     <select id="provider"></select>
                 </div>
                 <div class="field">
-                    <label for="model">模型</label>
+                    <label for="model" id="model-label">模型</label>
                     <select id="model"></select>
+                </div>
+                <div class="field">
+                    <label for="local-model">本地模型</label>
+                    <select id="local-model"></select>
                 </div>
                 <div class="field">
                     <label for="task-mode">SQL 类型</label>
@@ -668,8 +676,10 @@
         const config = window.__APP_CONFIG__;
         const state = {
             catalog: null,
+            engineMode: "single",
             provider: config.defaultProvider,
             model: "",
+            localModel: "",
             taskMode: "auto",
             sqlEngine: "mysql",
             execute: true,
@@ -677,8 +687,12 @@
             logFilter: "all"
         };
 
+        const engineModeEl = document.getElementById("engine-mode");
         const providerEl = document.getElementById("provider");
         const modelEl = document.getElementById("model");
+        const localModelEl = document.getElementById("local-model");
+        const providerLabelEl = document.getElementById("provider-label");
+        const modelLabelEl = document.getElementById("model-label");
         const taskModeEl = document.getElementById("task-mode");
         const sqlEngineEl = document.getElementById("sql-engine");
         const executeModeEl = document.getElementById("execute-mode");
@@ -863,7 +877,9 @@
             const embeddingText = embedding && embedding.enabled
                 ? "Embedding/" + embedding.model_name
                 : "Embedding/关闭";
-            configChipEl.textContent = "当前配置 MySQL/sql_agent | " + config.appPort + " | " + providerLabel + " | " + embeddingText;
+            const engineText = state.engineMode === "dual" ? "双引擎" : "单引擎";
+            const localText = state.localModel ? " | 本地/" + state.localModel : "";
+            configChipEl.textContent = "当前配置 MySQL/sql_agent | " + engineText + " | " + providerLabel + localText + " | " + embeddingText;
         }
 
         function updateSqlEngineState() {
@@ -878,6 +894,25 @@
             }
         }
 
+        function renderProviderOptions() {
+            if (!state.catalog) {
+                return;
+            }
+            const providerEntries = Object.entries(state.catalog.providers).filter(function ([key]) {
+                if (state.engineMode === "dual") {
+                    return key !== "local";
+                }
+                return true;
+            });
+            const providerOptions = providerEntries.map(function ([key, item]) {
+                return { value: key, label: item.label };
+            });
+            if (!providerOptions.some(function (item) { return item.value === state.provider; })) {
+                state.provider = state.engineMode === "dual" ? config.defaultProvider : "local";
+            }
+            renderOptions(providerEl, providerOptions, state.provider);
+        }
+
         function renderModelOptions() {
             if (!state.catalog) {
                 return;
@@ -886,6 +921,17 @@
             const modelOptions = (provider.model_options || []).map((item) => ({ value: item, label: item }));
             state.model = provider.model_options.includes(state.model) ? state.model : provider.default_model;
             renderOptions(modelEl, modelOptions, state.model);
+            const localOptions = ((state.catalog.local_llm && state.catalog.local_llm.model_options) || []).map((item) => ({ value: item, label: item }));
+            state.localModel = localOptions.some((item) => item.value === state.localModel)
+                ? state.localModel
+                : ((state.catalog.local_llm && state.catalog.local_llm.default_model) || "");
+            renderOptions(localModelEl, localOptions, state.localModel);
+            const providerIsLocal = state.provider === "local";
+            localModelEl.disabled = !(state.engineMode === "dual");
+            providerLabelEl.textContent = state.engineMode === "dual" ? "在线供应商" : "模型供应商";
+            modelLabelEl.textContent = state.engineMode === "dual"
+                ? "在线模型"
+                : (providerIsLocal ? "本地模型" : "模型");
             updateConfigChip();
         }
 
@@ -975,6 +1021,7 @@
         function renderResultBadges(data) {
             resultBadgesEl.innerHTML = "";
             const items = [
+                { label: "引擎模式", value: state.engineMode === "dual" ? "双引擎" : "单引擎" },
                 { label: "SQL 类型", value: lookupLabel((state.catalog && state.catalog.task_modes) || [], data.task_mode || "-") },
                 { label: "SQL 语法", value: lookupLabel((state.catalog && state.catalog.sql_engines) || [], data.sql_engine || "mysql") },
                 { label: "结果集", value: data.has_result_set ? "有" : "无" }
@@ -1172,8 +1219,10 @@
                 round_no: state.logRounds.length + 1,
                 created_at: formatDateObj(new Date(), true),
                 question: questionEl.value.trim(),
+                engine_mode: state.engineMode,
                 provider: state.provider,
                 model: state.model,
+                local_model: state.localModel,
                 task_mode: data.task_mode || getEffectiveTaskMode(),
                 sql_engine: data.sql_engine || (getEffectiveTaskMode() === "dql" ? "mysql" : state.sqlEngine),
                 execute: state.execute,
@@ -1227,6 +1276,11 @@
                     question: question,
                     provider: state.provider,
                     model: state.model,
+                    engine_mode: state.engineMode,
+                    local_model: state.engineMode === "dual"
+                        ? state.localModel
+                        : (state.provider === "local" ? state.model : state.localModel),
+                    online_model: state.provider === "local" ? "" : state.model,
                     task_mode: state.taskMode,
                     sql_engine: effectiveTaskMode === "dql" ? "mysql" : state.sqlEngine,
                     execute: state.execute
@@ -1272,20 +1326,27 @@
         async function loadModels() {
             const result = await fetchJson("/api/models");
             state.catalog = result.data;
-
-            const providerOptions = Object.entries(result.data.providers).map(([key, item]) => ({
-                value: key,
-                label: item.label
-            }));
+            state.engineMode = "single";
             state.provider = result.data.default_provider;
             state.model = result.data.providers[state.provider].default_model;
+            state.localModel = result.data.local_llm.default_model;
 
-            renderOptions(providerEl, providerOptions, state.provider);
+            renderOptions(engineModeEl, result.data.engine_modes, state.engineMode);
+            renderProviderOptions();
             renderModelOptions();
             renderOptions(taskModeEl, result.data.task_modes, state.taskMode);
             renderOptions(sqlEngineEl, result.data.sql_engines, state.sqlEngine);
             updateSqlEngineState();
         }
+
+        engineModeEl.addEventListener("change", function () {
+            state.engineMode = engineModeEl.value;
+            if (state.engineMode === "dual" && state.provider === "local") {
+                state.provider = config.defaultProvider;
+            }
+            renderProviderOptions();
+            renderModelOptions();
+        });
 
         providerEl.addEventListener("change", function () {
             state.provider = providerEl.value;
@@ -1295,6 +1356,10 @@
 
         modelEl.addEventListener("change", function () {
             state.model = modelEl.value;
+        });
+
+        localModelEl.addEventListener("change", function () {
+            state.localModel = localModelEl.value;
         });
 
         taskModeEl.addEventListener("change", function () {

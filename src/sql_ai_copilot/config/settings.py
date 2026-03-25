@@ -50,9 +50,20 @@ class ProviderSettings:
 @dataclass(frozen=True)
 class EmbeddingSettings:
     enabled: bool = os.getenv("LOCAL_EMBEDDING_ENABLED", "1") != "0"
+    backend: str = os.getenv("LOCAL_EMBEDDING_BACKEND", "hybrid")
     model_name: str = os.getenv("LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+    remote_model_name: str = os.getenv("LOCAL_EMBEDDING_REMOTE_MODEL", "")
+    base_url: str = os.getenv("LOCAL_EMBEDDING_BASE_URL", "http://127.0.0.1:8000/v1")
+    api_key: str = os.getenv("LOCAL_EMBEDDING_API_KEY", "EMPTY")
+    request_timeout: float = float(os.getenv("LOCAL_EMBEDDING_TIMEOUT", "12"))
     cache_dir: Path = DATA_DIR / "embedding_models"
     index_dir: Path = DATA_DIR / "vector_index"
+
+
+@dataclass(frozen=True)
+class LocalLLMSettings:
+    base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    default_model: str = os.getenv("OLLAMA_DEFAULT_MODEL", "qwen3:8b")
 
 
 def _provider_catalog() -> dict[str, ProviderSettings]:
@@ -88,6 +99,7 @@ class AppSettings:
     mysql: MySQLSettings = field(default_factory=MySQLSettings)
     seed: SeedSettings = field(default_factory=SeedSettings)
     embedding: EmbeddingSettings = field(default_factory=EmbeddingSettings)
+    local_llm: LocalLLMSettings = field(default_factory=LocalLLMSettings)
     providers: dict[str, ProviderSettings] = field(default_factory=_provider_catalog)
     default_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "bailian")
     app_host: str = os.getenv("APP_HOST", "127.0.0.1")

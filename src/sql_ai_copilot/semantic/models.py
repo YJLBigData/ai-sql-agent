@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SemanticContext:
     question: str
+    normalized_question: str = ""
     metrics: tuple[str, ...] = ()
     dimensions: tuple[str, ...] = ()
     time_grain: str | None = None
@@ -23,9 +24,11 @@ class SemanticContext:
     notes: tuple[str, ...] = ()
     route: str = "llm"
     route_reason: str = "未命中本地模板。"
+    matched_synonyms: tuple[dict[str, str], ...] = ()
 
     def to_trace(self) -> dict[str, object]:
         return {
+            "normalized_question": self.normalized_question or self.question,
             "metrics": list(self.metrics),
             "dimensions": list(self.dimensions),
             "time_grain": self.time_grain,
@@ -43,4 +46,5 @@ class SemanticContext:
             "notes": list(self.notes),
             "route": self.route,
             "route_reason": self.route_reason,
+            "matched_synonyms": list(self.matched_synonyms),
         }

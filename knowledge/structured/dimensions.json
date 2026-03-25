@@ -1,0 +1,72 @@
+[
+  {
+    "code": "channel_name",
+    "name": "渠道",
+    "aliases": ["渠道", "渠道名称"],
+    "description": "门店所属渠道，如天猫、京东、抖音、拼多多。",
+    "source_tables": ["dim_store"],
+    "field_name": "channel_name",
+    "available": true,
+    "security_level": "S1"
+  },
+  {
+    "code": "store_name",
+    "name": "店铺",
+    "aliases": ["门店", "店铺", "店铺名称"],
+    "description": "交易发生的店铺或门店。",
+    "source_tables": ["dim_store"],
+    "field_name": "store_name",
+    "available": true,
+    "security_level": "S1"
+  },
+  {
+    "code": "warehouse_name",
+    "name": "仓库",
+    "aliases": ["仓库", "仓"],
+    "description": "库存或出入库对应的仓库。",
+    "source_tables": ["dim_warehouse"],
+    "field_name": "warehouse_name",
+    "available": true,
+    "security_level": "S1"
+  },
+  {
+    "code": "product_name",
+    "name": "商品",
+    "aliases": ["商品", "sku", "商品名称", "产品"],
+    "description": "最细粒度商品维度。",
+    "source_tables": ["dim_product", "fct_order_item", "fct_refund_item", "fct_inventory_snapshot", "fct_inventory_flow"],
+    "field_name": "product_name",
+    "available": true,
+    "security_level": "S1"
+  },
+  {
+    "code": "series_name",
+    "name": "系列",
+    "aliases": ["系列", "产品系列"],
+    "description": "商品所属系列，如特仑苏、纯甄、优益C。",
+    "source_tables": ["dim_product", "fct_order_item", "fct_refund_item", "fct_inventory_snapshot", "fct_inventory_flow"],
+    "field_name": "series_name",
+    "available": true,
+    "security_level": "S1"
+  },
+  {
+    "code": "brand_name",
+    "name": "品牌",
+    "aliases": ["品牌", "品牌名称"],
+    "description": "商品品牌。当前演示数据主要为蒙牛。",
+    "source_tables": ["dim_product", "fct_order_item", "fct_refund_item", "fct_inventory_snapshot", "fct_inventory_flow"],
+    "field_name": "brand_name",
+    "available": true,
+    "security_level": "S1"
+  },
+  {
+    "code": "country_name",
+    "name": "国家",
+    "aliases": ["国家", "国家名称", "国家站点"],
+    "description": "跨境场景常见维度。当前演示库未落该字段，提问时需要明确告知不可用或后续补表。",
+    "source_tables": [],
+    "field_name": "",
+    "available": false,
+    "security_level": "S0"
+  }
+]

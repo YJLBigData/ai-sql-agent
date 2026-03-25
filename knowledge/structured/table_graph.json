@@ -1,0 +1,58 @@
+[
+  {
+    "left_table": "fct_order_main",
+    "right_table": "dim_store",
+    "join_type": "LEFT JOIN",
+    "join_keys": ["store_id"],
+    "description": "订单主表通过 store_id 关联门店维度，获取渠道、区域、省市、门店信息。",
+    "security_level": "S2"
+  },
+  {
+    "left_table": "fct_order_main",
+    "right_table": "dim_user",
+    "join_type": "LEFT JOIN",
+    "join_keys": ["user_id"],
+    "description": "订单主表通过 user_id 关联用户维度，用于会员、来源渠道、地域分析。",
+    "security_level": "S2"
+  },
+  {
+    "left_table": "fct_order_item",
+    "right_table": "fct_order_main",
+    "join_type": "INNER JOIN",
+    "join_keys": ["order_id"],
+    "description": "订单明细通过 order_id 回到订单主表获取支付状态、支付时间和门店信息。",
+    "security_level": "S2"
+  },
+  {
+    "left_table": "fct_refund_main",
+    "right_table": "dim_store",
+    "join_type": "LEFT JOIN",
+    "join_keys": ["store_id"],
+    "description": "退款主表通过 store_id 关联门店维度，按渠道和区域汇总退款表现。",
+    "security_level": "S2"
+  },
+  {
+    "left_table": "fct_refund_item",
+    "right_table": "fct_refund_main",
+    "join_type": "INNER JOIN",
+    "join_keys": ["refund_id", "order_id"],
+    "description": "退款明细通过 refund_id 和 order_id 回到退款主表，获取退款状态和退款完成时间。",
+    "security_level": "S2"
+  },
+  {
+    "left_table": "fct_inventory_snapshot",
+    "right_table": "dim_warehouse",
+    "join_type": "LEFT JOIN",
+    "join_keys": ["warehouse_id"],
+    "description": "库存快照通过 warehouse_id 关联仓库维度，按仓库、仓型、区域分析库存。",
+    "security_level": "S2"
+  },
+  {
+    "left_table": "fct_inventory_flow",
+    "right_table": "dim_warehouse",
+    "join_type": "LEFT JOIN",
+    "join_keys": ["warehouse_id"],
+    "description": "库存流水通过 warehouse_id 关联仓库维度，分析入库量、出库量和流转。",
+    "security_level": "S2"
+  }
+]

@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 
 import numpy as np
+from openai import OpenAI
 
 from sql_ai_copilot.config.settings import EmbeddingSettings
 from sql_ai_copilot.logging_utils import get_logger
@@ -19,12 +20,14 @@ class LocalEmbeddingModel:
         self.settings = settings
         self.logger = get_logger("embedding")
         self._model: TextEmbedding | None = None
+        self._client: OpenAI | None = None
+        self._resolved_model_name: str | None = None
         self._disabled_reason: str | None = None
         self._recovered_once = False
 
     @property
     def enabled(self) -> bool:
-        return self.settings.enabled and self._disabled_reason is None and TextEmbedding is not None
+        return self.settings.enabled and self._disabled_reason is None
 
     @property
     def disabled_reason(self) -> str | None:
@@ -33,6 +36,12 @@ class LocalEmbeddingModel:
     def embed_documents(self, texts: list[str]) -> np.ndarray | None:
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
+        if self.settings.backend in {"openai_compatible", "hybrid"}:
+            vectors = self._embed_via_openai_compatible(texts)
+            if vectors is not None:
+                return vectors
+            if self.settings.backend == "openai_compatible":
+                return None
         model = self._get_model()
         if model is None:
             return None
@@ -40,6 +49,12 @@ class LocalEmbeddingModel:
         return self._normalize(vectors)
 
     def embed_query(self, text: str) -> np.ndarray | None:
+        if self.settings.backend in {"openai_compatible", "hybrid"}:
+            vectors = self._embed_via_openai_compatible([text])
+            if vectors is not None and vectors.size > 0:
+                return vectors[0]
+            if self.settings.backend == "openai_compatible":
+                return None
         model = self._get_model()
         if model is None:
             return None
@@ -50,6 +65,8 @@ class LocalEmbeddingModel:
     def _get_model(self) -> TextEmbedding | None:
         if not self.settings.enabled:
             self._disabled_reason = "本地 embedding 已关闭。"
+            return None
+        if self.settings.backend == "openai_compatible":
             return None
         if TextEmbedding is None:
             self._disabled_reason = "fastembed 未安装，已回退到非向量检索。"
@@ -76,6 +93,43 @@ class LocalEmbeddingModel:
             self._disabled_reason = f"本地 embedding 模型加载失败: {exc}"
             self.logger.warning("embedding_model_load_failed error=%s", exc)
             return None
+
+    def _embed_via_openai_compatible(self, texts: list[str]) -> np.ndarray | None:
+        try:
+            client = self._get_openai_client()
+            model_name = self._resolve_remote_model_name(client)
+            batches: list[np.ndarray] = []
+            for start in range(0, len(texts), 12):
+                response = client.embeddings.create(model=model_name, input=texts[start : start + 12])
+                batches.append(np.asarray([item.embedding for item in response.data], dtype=np.float32))
+            vectors = np.vstack(batches) if batches else np.zeros((0, 0), dtype=np.float32)
+            self.logger.info("embedding_remote_done backend=%s model=%s size=%s", self.settings.backend, model_name, len(texts))
+            return self._normalize(vectors)
+        except Exception as exc:  # pragma: no cover - runtime/network fallback
+            self.logger.warning("embedding_remote_failed error=%s", exc)
+            return None
+
+    def _get_openai_client(self) -> OpenAI:
+        if self._client is None:
+            self._client = OpenAI(
+                api_key=self.settings.api_key,
+                base_url=self.settings.base_url,
+                timeout=self.settings.request_timeout,
+                max_retries=1,
+            )
+        return self._client
+
+    def _resolve_remote_model_name(self, client: OpenAI) -> str:
+        if self._resolved_model_name:
+            return self._resolved_model_name
+        if self.settings.remote_model_name:
+            self._resolved_model_name = self.settings.remote_model_name
+            return self._resolved_model_name
+        model_list = client.models.list()
+        if not model_list.data:
+            raise RuntimeError("本地 embedding 服务未返回任何模型。")
+        self._resolved_model_name = model_list.data[0].id
+        return self._resolved_model_name
 
     @staticmethod
     def _normalize(vectors: np.ndarray) -> np.ndarray:

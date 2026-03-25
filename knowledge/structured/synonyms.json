@@ -1,0 +1,15 @@
+[
+  {"alias": "营业额", "canonical": "gmv", "type": "metric"},
+  {"alias": "销售额", "canonical": "gmv", "type": "metric"},
+  {"alias": "交易额", "canonical": "gmv", "type": "metric"},
+  {"alias": "净gmv", "canonical": "net_payment_amount", "type": "metric"},
+  {"alias": "退款成功金额", "canonical": "refund_amount", "type": "metric"},
+  {"alias": "回购率", "canonical": "repeat_purchase_rate", "type": "metric"},
+  {"alias": "完单率", "canonical": "fulfillment_rate", "type": "metric"},
+  {"alias": "店铺", "canonical": "store_name", "type": "dimension"},
+  {"alias": "门店", "canonical": "store_name", "type": "dimension"},
+  {"alias": "仓", "canonical": "warehouse_name", "type": "dimension"},
+  {"alias": "sku", "canonical": "product_name", "type": "dimension"},
+  {"alias": "产品", "canonical": "product_name", "type": "dimension"},
+  {"alias": "品牌", "canonical": "brand_name", "type": "dimension"}
+]

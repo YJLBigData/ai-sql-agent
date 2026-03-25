@@ -1,0 +1,86 @@
+[
+  {
+    "table_name": "fct_order_main",
+    "field_name": "payment_amount",
+    "business_name": "实付金额",
+    "description": "订单主表级别的支付金额，是 GMV 的默认口径字段。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_order_main",
+    "field_name": "net_payment_amount",
+    "business_name": "净销售额",
+    "description": "订单主表级别的净销售额，已扣减成功退款金额。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_order_main",
+    "field_name": "pay_status",
+    "business_name": "支付状态",
+    "description": "支付成功分析统一限定为 pay_status='已支付'。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_order_main",
+    "field_name": "finish_time",
+    "business_name": "订单完成时间",
+    "description": "履约场景用 finish_time 和 pay_time 计算履约耗时。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_refund_main",
+    "field_name": "refund_status",
+    "business_name": "退款状态",
+    "description": "退款分析默认限定 refund_status='退款成功'。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_refund_main",
+    "field_name": "refund_amount",
+    "business_name": "退款金额",
+    "description": "退款主表级别的成功退款金额，适合订单级或门店级退款分析。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_order_item",
+    "field_name": "pay_amount",
+    "business_name": "明细实付金额",
+    "description": "商品维度 GMV 要使用订单明细 pay_amount，不能直接分摊订单主表 payment_amount。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_refund_item",
+    "field_name": "refund_amount",
+    "business_name": "明细退款金额",
+    "description": "商品维度退款金额要使用退款明细 refund_amount。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "dim_store",
+    "field_name": "channel_name",
+    "business_name": "渠道名称",
+    "description": "渠道分析必须通过 dim_store.channel_name 获取，不能臆造事实表渠道字段。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "dim_product",
+    "field_name": "series_name",
+    "business_name": "系列名称",
+    "description": "系列维度可来自商品维表或商品相关事实表中的冗余维度字段。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_inventory_snapshot",
+    "field_name": "available_qty",
+    "business_name": "可用库存量",
+    "description": "库存快照中的可用库存量，用于可售库存和缺货判断。",
+    "security_level": "S2"
+  },
+  {
+    "table_name": "fct_inventory_flow",
+    "field_name": "direction",
+    "business_name": "出入库方向",
+    "description": "库存流水以 direction 区分入库和出库。",
+    "security_level": "S2"
+  }
+]

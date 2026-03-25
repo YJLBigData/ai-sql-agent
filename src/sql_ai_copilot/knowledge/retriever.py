@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from sql_ai_copilot.logging_utils import get_logger
 
 from .models import KnowledgeDocument
+from .reranker import LocalReranker
 
 if TYPE_CHECKING:
     from sql_ai_copilot.semantic.models import SemanticContext
@@ -56,13 +57,20 @@ def cosine_similarity(left: Counter[str], right: Counter[str]) -> float:
 
 
 class LocalRetriever:
-    def __init__(self, documents: list[KnowledgeDocument], vector_store: KnowledgeVectorStore | None = None) -> None:
+    def __init__(
+        self,
+        documents: list[KnowledgeDocument],
+        vector_store: KnowledgeVectorStore | None = None,
+        reranker: LocalReranker | None = None,
+    ) -> None:
         self.documents = documents
         self.document_map = {document.doc_id: document for document in documents}
         self.doc_freq: Counter[str] = Counter()
         self.char_doc_freq: Counter[str] = Counter()
         self.logger = get_logger("retriever")
         self.vector_store = vector_store
+        self.reranker = reranker
+        self.last_trace: dict[str, object] = {}
         self.token_counters: dict[str, Counter[str]] = {}
         self.chargram_counters: dict[str, Counter[str]] = {}
         for document in documents:
@@ -74,10 +82,11 @@ class LocalRetriever:
             self.char_doc_freq.update(set(char_counter))
 
     def search(self, query: str, top_k: int = 6, semantic_context: SemanticContext | None = None) -> list[KnowledgeDocument]:
-        query_terms = tokenize(query)
+        working_query = semantic_context.normalized_question if semantic_context and semantic_context.normalized_question else query
+        query_terms = tokenize(working_query)
         query_counter = Counter(query_terms)
-        query_char_counter = Counter(char_ngrams(query))
-        vector_scores = self._vector_scores(query, semantic_context, top_k=max(top_k * 2, 8))
+        query_char_counter = Counter(char_ngrams(working_query))
+        vector_scores = self._vector_scores(working_query, semantic_context, top_k=max(top_k * 2, 8))
         if not query_terms:
             hits = self.documents[:top_k]
             self.logger.info("retriever_search_empty_query top_k=%s hits=%s", top_k, [document.title for document in hits])
@@ -105,10 +114,19 @@ class LocalRetriever:
                 scored.append((score, document))
 
         scored.sort(key=lambda item: item[0], reverse=True)
-        hits = [item[1] for item in scored[:top_k]] or self.documents[:top_k]
+        candidates = [item[1] for item in scored[: max(top_k * 3, 10)]] or self.documents[: max(top_k * 3, 10)]
+        hits = self.reranker.rerank(working_query, candidates, semantic_context, top_n=top_k) if self.reranker else candidates[:top_k]
+        self.last_trace = {
+            "query": working_query,
+            "top_k": top_k,
+            "vector_enabled": bool(self.vector_store and self.vector_store.enabled),
+            "candidate_titles": [f"{document.category}/{document.title}" for document in candidates[:top_k]],
+            "hits": [f"{document.category}/{document.title}" for document in hits],
+            "rerank": getattr(self.reranker, "last_trace", {}),
+        }
         self.logger.info(
             "retriever_search query=%s top_k=%s semantic=%s hits=%s",
-            query,
+            working_query,
             top_k,
             semantic_context.to_trace() if semantic_context else None,
             [f"{document.category}/{document.title}" for document in hits],

@@ -12,9 +12,20 @@ from sql_ai_copilot.database.schema_service import SchemaService
 from sql_ai_copilot.database.sql_validator import SQLValidator
 from sql_ai_copilot.knowledge.models import KnowledgeDocument
 from sql_ai_copilot.knowledge.retriever import LocalRetriever, tokenize
+from sql_ai_copilot.knowledge.structured_knowledge import StructuredKnowledgeBase
+from sql_ai_copilot.llm.ollama_client import OllamaClient
 from sql_ai_copilot.llm.openai_compatible_client import OpenAICompatibleClient
-from sql_ai_copilot.llm.prompt_builder import SYSTEM_PROMPT, build_repair_prompt, build_user_prompt
+from sql_ai_copilot.llm.prompt_builder import (
+    ONLINE_PLANNER_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_local_repair_prompt,
+    build_local_sql_prompt,
+    build_online_plan_prompt,
+    build_repair_prompt,
+    build_user_prompt,
+)
 from sql_ai_copilot.logging_utils import get_logger
+from sql_ai_copilot.security.router import SecurityRouter
 from sql_ai_copilot.semantic import DeterministicSQLPlanner, SemanticAnalyzer
 from sql_ai_copilot.semantic.models import SemanticContext
 from sql_ai_copilot.sql_meta import (
@@ -186,16 +197,22 @@ class SQLCopilot:
         retriever: LocalRetriever,
         validator: SQLValidator,
         llm_client: OpenAICompatibleClient,
+        local_llm_client: OllamaClient,
         semantic_analyzer: SemanticAnalyzer,
         planner: DeterministicSQLPlanner,
+        security_router: SecurityRouter,
+        knowledge_base: StructuredKnowledgeBase,
     ) -> None:
         self.client = client
         self.schema_service = schema_service
         self.retriever = retriever
         self.validator = validator
         self.llm_client = llm_client
+        self.local_llm_client = local_llm_client
         self.semantic_analyzer = semantic_analyzer
         self.planner = planner
+        self.security_router = security_router
+        self.knowledge_base = knowledge_base
         self.logger = get_logger("agent")
 
     def generate_sql(
@@ -205,8 +222,21 @@ class SQLCopilot:
         model_name: str,
         task_mode: str | None = None,
         sql_engine: str = "mysql",
+        engine_mode: str = "single",
+        local_model_name: str = "",
+        online_model_name: str = "",
     ) -> SQLAgentResult:
-        return self._run_round(question, provider_name, model_name, execute=False, task_mode=task_mode, sql_engine=sql_engine)
+        return self._run_round(
+            question,
+            provider_name,
+            model_name,
+            execute=False,
+            task_mode=task_mode,
+            sql_engine=sql_engine,
+            engine_mode=engine_mode,
+            local_model_name=local_model_name,
+            online_model_name=online_model_name,
+        )
 
     def run(
         self,
@@ -216,8 +246,21 @@ class SQLCopilot:
         execute: bool = True,
         task_mode: str | None = None,
         sql_engine: str = "mysql",
+        engine_mode: str = "single",
+        local_model_name: str = "",
+        online_model_name: str = "",
     ) -> SQLAgentResult:
-        return self._run_round(question, provider_name, model_name, execute=execute, task_mode=task_mode, sql_engine=sql_engine)
+        return self._run_round(
+            question,
+            provider_name,
+            model_name,
+            execute=execute,
+            task_mode=task_mode,
+            sql_engine=sql_engine,
+            engine_mode=engine_mode,
+            local_model_name=local_model_name,
+            online_model_name=online_model_name,
+        )
 
     def _run_round(
         self,
@@ -227,10 +270,16 @@ class SQLCopilot:
         execute: bool,
         task_mode: str | None,
         sql_engine: str,
+        engine_mode: str,
+        local_model_name: str,
+        online_model_name: str,
     ) -> SQLAgentResult:
         resolved_task_mode = self._resolve_task_mode(task_mode, question)
         resolved_sql_engine = self._resolve_sql_engine(resolved_task_mode, sql_engine)
         has_result_set = is_query_task(resolved_task_mode)
+        resolved_engine_mode = self._resolve_engine_mode(engine_mode, provider_name)
+        effective_local_model = local_model_name or (model_name if provider_name == "local" else self.local_llm_client.default_model)
+        effective_online_model = online_model_name or (model_name if provider_name != "local" else "")
         semantic_context = self.semantic_analyzer.analyze(question, resolved_task_mode, resolved_sql_engine)
         documents = self.retriever.search(question, semantic_context=semantic_context)
         related_tables = self._resolve_relevant_tables(question, documents, semantic_context)
@@ -238,6 +287,7 @@ class SQLCopilot:
         schema_summary = self.schema_service.get_compact_schema_summary(semantic_context.relevant_columns, related_tables or None)
         knowledge_snippets = self._build_knowledge_snippets(question, documents, semantic_context)
         semantic_summary = self._build_semantic_summary(semantic_context)
+        security_decision = self.security_router.classify(question, semantic_context, documents, related_tables)
 
         round_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         round_started_perf = perf_counter()
@@ -245,12 +295,17 @@ class SQLCopilot:
             "question": question,
             "provider": provider_name,
             "model": model_name,
+            "engine_mode": resolved_engine_mode,
+            "local_model": effective_local_model,
+            "online_model": effective_online_model,
             "execute": execute,
             "task_mode": resolved_task_mode,
             "sql_engine": resolved_sql_engine,
             "has_result_set": has_result_set,
             "related_tables": related_tables,
             "semantic": semantic_context.to_trace(),
+            "security": security_decision.to_trace(),
+            "retrieval": getattr(self.retriever, "last_trace", {}),
             "started_at": round_started_at,
             "attempts": [],
             "documents": [
@@ -269,6 +324,7 @@ class SQLCopilot:
             trace["error"] = semantic_context.route_reason
             trace["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
             trace["elapsed_ms"] = round((perf_counter() - round_started_perf) * 1000)
+            trace["usage"] = self._summarize_usage(trace["attempts"])
             self.logger.warning("agent_blocked %s", json.dumps(trace, ensure_ascii=False))
             raise SQLCopilotError(
                 semantic_context.route_reason,
@@ -295,6 +351,7 @@ class SQLCopilot:
             trace["success"] = False
             trace["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
             trace["elapsed_ms"] = round((perf_counter() - round_started_perf) * 1000)
+            trace["usage"] = self._summarize_usage(trace["attempts"])
             self.logger.warning("agent_clarification_required %s", json.dumps(trace, ensure_ascii=False))
             raise SQLClarificationRequired(
                 message,
@@ -364,6 +421,7 @@ class SQLCopilot:
                     trace["execution_note"] = "非查询语句只做 SQL 生成与校验，不返回结果集。"
                 elif not should_execute:
                     trace["execution_note"] = "当前为仅生成 SQL 模式，未执行查询。"
+                trace["usage"] = self._summarize_usage(trace["attempts"])
                 message = self._build_success_message(
                     resolved_task_mode,
                     resolved_sql_engine,
@@ -393,36 +451,136 @@ class SQLCopilot:
                 trace["route"] = "llm_fallback"
                 self.logger.warning("agent_template_failed %s", json.dumps(attempt_trace, ensure_ascii=False))
 
+        planning_json: dict[str, object] | None = None
+        if resolved_engine_mode == "dual":
+            if provider_name == "local":
+                raise ValueError("双引擎模式下在线引擎必须选择百炼或 DeepSeek。")
+            if security_decision.allow_online:
+                planner_prompt = build_online_plan_prompt(
+                    question,
+                    resolved_task_mode,
+                    resolved_sql_engine,
+                    security_decision.masked_context,
+                    semantic_summary=semantic_summary,
+                    extra_guidance=extra_guidance,
+                )
+                try:
+                    response_text, planner_trace = self.llm_client.generate(
+                        provider_name,
+                        effective_online_model or model_name,
+                        ONLINE_PLANNER_SYSTEM_PROMPT,
+                        planner_prompt,
+                    )
+                    planning_json = self._extract_json_object(response_text)
+                    plan_attempt = {
+                        "attempt_no": len(trace["attempts"]) + 1,
+                        "stage": "online_plan",
+                        **planner_trace,
+                        "normalized_sql": "",
+                        "prompt_response_diff": self._build_prompt_response_diff(planner_prompt, response_text),
+                        "status": "success",
+                        "error": None,
+                        "planning_json": planning_json,
+                    }
+                    trace["attempts"].append(plan_attempt)
+                    if planning_json.get("clarification_required"):
+                        clarification_message = str(planning_json.get("clarification_question") or "请补充必要条件。")
+                        raise SQLClarificationRequired(
+                            clarification_message,
+                            [clarification_message],
+                            [],
+                            trace,
+                            documents,
+                            resolved_task_mode,
+                            resolved_sql_engine,
+                        )
+                except SQLClarificationRequired:
+                    raise
+                except Exception as exc:
+                    last_error = str(exc)
+                    trace["attempts"].append(
+                        {
+                            "attempt_no": len(trace["attempts"]) + 1,
+                            "stage": "online_plan",
+                            "provider": provider_name,
+                            "model": effective_online_model or model_name,
+                            "base_url": self.llm_client.settings.get_provider(provider_name).base_url,
+                            "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "ended_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "elapsed_ms": 0,
+                            "request_payload": {"masked_context": security_decision.masked_context},
+                            "response_id": None,
+                            "response_model": effective_online_model or model_name,
+                            "response_text": "",
+                            "normalized_sql": "",
+                            "prompt_response_diff": "",
+                            "status": "failed",
+                            "error": last_error,
+                        }
+                    )
+                    trace["planner_warning"] = last_error
+            else:
+                trace["planner_warning"] = "安全等级为 S2，双引擎自动降级为本地单引擎。"
+
         llm_attempt_offset = len(trace["attempts"])
+        use_local_generation = provider_name == "local" or resolved_engine_mode == "dual" or not security_decision.allow_online
+        final_route = "dual_engine" if resolved_engine_mode == "dual" else ("local_llm" if use_local_generation else "llm")
         for llm_attempt_no in range(1, max_attempts + 1):
             attempt_no = llm_attempt_no + llm_attempt_offset
-            stage = "generate" if llm_attempt_no == 1 else "repair"
-            if llm_attempt_no == 1:
-                prompt = build_user_prompt(
-                    question,
-                    schema_summary,
-                    documents,
-                    resolved_task_mode,
-                    resolved_sql_engine,
-                    extra_guidance,
-                    semantic_summary=semantic_summary,
-                    knowledge_snippets=knowledge_snippets,
-                )
+            stage = ("local_generate" if llm_attempt_no == 1 else "local_repair") if use_local_generation else ("generate" if llm_attempt_no == 1 else "repair")
+            if use_local_generation:
+                if llm_attempt_no == 1:
+                    prompt = build_local_sql_prompt(
+                        question,
+                        schema_summary,
+                        resolved_task_mode,
+                        resolved_sql_engine,
+                        planning_json,
+                        knowledge_snippets,
+                        semantic_summary=semantic_summary,
+                        extra_guidance=extra_guidance,
+                    )
+                else:
+                    prompt = build_local_repair_prompt(
+                        question,
+                        schema_summary,
+                        resolved_task_mode,
+                        resolved_sql_engine,
+                        planning_json,
+                        knowledge_snippets,
+                        last_sql,
+                        last_error,
+                        semantic_summary=semantic_summary,
+                        extra_guidance=extra_guidance,
+                    )
+                response_text, llm_trace = self.local_llm_client.chat(effective_local_model, SYSTEM_PROMPT, prompt)
             else:
-                prompt = build_repair_prompt(
-                    question,
-                    schema_summary,
-                    documents,
-                    last_sql,
-                    last_error,
-                    resolved_task_mode,
-                    resolved_sql_engine,
-                    extra_guidance,
-                    semantic_summary=semantic_summary,
-                    knowledge_snippets=knowledge_snippets,
-                )
+                if llm_attempt_no == 1:
+                    prompt = build_user_prompt(
+                        question,
+                        schema_summary,
+                        documents,
+                        resolved_task_mode,
+                        resolved_sql_engine,
+                        extra_guidance,
+                        semantic_summary=semantic_summary,
+                        knowledge_snippets=knowledge_snippets,
+                    )
+                else:
+                    prompt = build_repair_prompt(
+                        question,
+                        schema_summary,
+                        documents,
+                        last_sql,
+                        last_error,
+                        resolved_task_mode,
+                        resolved_sql_engine,
+                        extra_guidance,
+                        semantic_summary=semantic_summary,
+                        knowledge_snippets=knowledge_snippets,
+                    )
+                response_text, llm_trace = self.llm_client.generate(provider_name, effective_online_model or model_name, SYSTEM_PROMPT, prompt)
 
-            response_text, llm_trace = self.llm_client.generate(provider_name, model_name, SYSTEM_PROMPT, prompt)
             sql = self._normalize_sql(response_text)
             attempt_trace = {
                 "attempt_no": attempt_no,
@@ -445,16 +603,18 @@ class SQLCopilot:
                     self._validate_result_grain(question, rows)
                 trace["attempts"].append(attempt_trace)
                 trace["success"] = True
-                trace["route"] = "llm"
+                trace["route"] = final_route
                 trace["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
                 trace["elapsed_ms"] = round((perf_counter() - round_started_perf) * 1000)
                 trace["executed"] = should_execute
+                trace["planning_json"] = planning_json
                 if rows is not None:
                     trace["row_count"] = len(rows)
                 if not has_result_set:
                     trace["execution_note"] = "非查询语句只做 SQL 生成与校验，不返回结果集。"
                 elif not should_execute:
                     trace["execution_note"] = "当前为仅生成 SQL 模式，未执行查询。"
+                trace["usage"] = self._summarize_usage(trace["attempts"])
 
                 message = self._build_success_message(
                     resolved_task_mode,
@@ -486,6 +646,8 @@ class SQLCopilot:
         trace["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
         trace["elapsed_ms"] = round((perf_counter() - round_started_perf) * 1000)
         trace["error"] = last_error
+        trace["planning_json"] = planning_json
+        trace["usage"] = self._summarize_usage(trace["attempts"])
         self.logger.error("agent_trace_failed %s", json.dumps(trace, ensure_ascii=False))
         raise SQLCopilotError(
             last_error,
@@ -771,6 +933,7 @@ class SQLCopilot:
 
     def _build_semantic_summary(self, semantic_context: SemanticContext) -> str:
         lines = [
+            f"- 归一后问题: {semantic_context.normalized_question or semantic_context.question}",
             f"- 路由策略: {semantic_context.route}（{semantic_context.route_reason}）",
             f"- 指标: {', '.join(semantic_context.metrics) if semantic_context.metrics else '未识别'}",
             f"- 维度: {', '.join(semantic_context.dimensions) if semantic_context.dimensions else '无显式维度'}",
@@ -781,6 +944,9 @@ class SQLCopilot:
             f"- 主题族: {semantic_context.metric_family}",
             f"- 候选表: {', '.join(semantic_context.requested_tables) if semantic_context.requested_tables else '未识别'}",
         ]
+        if semantic_context.matched_synonyms:
+            synonym_summary = "；".join(f"{item['alias']}=>{item['canonical']}" for item in semantic_context.matched_synonyms)
+            lines.append(f"- 同义词归一: {synonym_summary}")
         if semantic_context.hints:
             lines.append("- 语义提示: " + "；".join(semantic_context.hints))
         if semantic_context.notes:
@@ -793,11 +959,16 @@ class SQLCopilot:
         documents: list[KnowledgeDocument],
         semantic_context: SemanticContext,
     ) -> list[str]:
-        snippets: list[str] = []
+        snippets = self.knowledge_base.build_cards(
+            semantic_context.metrics,
+            semantic_context.dimensions,
+            list(semantic_context.requested_tables),
+            semantic_context.topic,
+        )
         for document in documents:
             excerpt = self._compress_document_content(question, document, semantic_context)
             snippets.append(f"[{document.category}/{document.title}]\n{excerpt}")
-        return snippets
+        return snippets[:14]
 
     @staticmethod
     def _compress_document_content(
@@ -931,10 +1102,50 @@ class SQLCopilot:
     @staticmethod
     def _normalize_sql(text: str) -> str:
         normalized = text.strip()
+        if "</think>" in normalized:
+            normalized = normalized.split("</think>", 1)[-1].strip()
+        normalized = re.sub(r"<think>.*?</think>", "", normalized, flags=re.DOTALL)
         if normalized.startswith("```"):
             normalized = normalized.strip("`")
             normalized = normalized.replace("sql", "", 1).strip()
+        if "```" in normalized:
+            normalized = normalized.replace("```sql", "").replace("```", "").strip()
         return normalized.rstrip(";") + ";"
+
+    @staticmethod
+    def _resolve_engine_mode(engine_mode: str, provider_name: str) -> str:
+        value = (engine_mode or "single").strip().lower()
+        if value not in {"single", "dual"}:
+            raise ValueError("引擎模式只支持 single 或 dual。")
+        if provider_name == "local":
+            return "single"
+        return value
+
+    @staticmethod
+    def _extract_json_object(text: str) -> dict[str, object]:
+        payload = text.strip()
+        if payload.startswith("```"):
+            payload = payload.replace("```json", "").replace("```", "").strip()
+        match = re.search(r"\{.*\}", payload, flags=re.DOTALL)
+        if not match:
+            raise ValueError("在线规划器未返回合法 JSON。")
+        return json.loads(match.group(0))
+
+    @staticmethod
+    def _summarize_usage(attempts: list[dict[str, object]]) -> dict[str, int]:
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        for attempt in attempts:
+            usage = attempt.get("usage") or {}
+            prompt_tokens += int(usage.get("prompt_tokens") or 0)
+            completion_tokens += int(usage.get("completion_tokens") or 0)
+            total_tokens += int(usage.get("total_tokens") or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
 
     @staticmethod
     def _build_prompt_response_diff(prompt: str, response_text: str) -> str:

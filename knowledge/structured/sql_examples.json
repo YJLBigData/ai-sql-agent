@@ -1,0 +1,52 @@
+[
+  {
+    "code": "channel_gmv_refund_rate",
+    "name": "渠道 GMV 退款率",
+    "path": "knowledge/sql_examples/channel_gmv_refund_rate.sql",
+    "topic": "sales",
+    "metrics": ["gmv", "refund_amount", "refund_rate"],
+    "dimensions": ["channel_name"],
+    "tables": ["fct_order_main", "fct_refund_main", "dim_store"],
+    "security_level": "S1"
+  },
+  {
+    "code": "gmv_by_series",
+    "name": "系列 GMV",
+    "path": "knowledge/sql_examples/gmv_by_series.sql",
+    "topic": "sales",
+    "metrics": ["gmv"],
+    "dimensions": ["series_name"],
+    "tables": ["fct_order_item", "fct_order_main"],
+    "security_level": "S1"
+  },
+  {
+    "code": "repeat_purchase_by_channel",
+    "name": "渠道复购",
+    "path": "knowledge/sql_examples/repeat_purchase_by_channel.sql",
+    "topic": "repeat_purchase",
+    "metrics": ["repeat_purchase_rate", "repeat_user_count"],
+    "dimensions": ["channel_name"],
+    "tables": ["fct_order_main", "dim_store"],
+    "security_level": "S2"
+  },
+  {
+    "code": "fulfillment_by_channel",
+    "name": "渠道履约",
+    "path": "knowledge/sql_examples/fulfillment_by_channel.sql",
+    "topic": "fulfillment",
+    "metrics": ["fulfillment_rate", "avg_fulfillment_hours"],
+    "dimensions": ["channel_name"],
+    "tables": ["fct_order_main", "dim_store"],
+    "security_level": "S2"
+  },
+  {
+    "code": "inventory_by_warehouse",
+    "name": "仓库库存",
+    "path": "knowledge/sql_examples/inventory_by_warehouse.sql",
+    "topic": "inventory",
+    "metrics": ["inventory_qty", "available_qty", "stockout_rate"],
+    "dimensions": ["warehouse_name"],
+    "tables": ["fct_inventory_snapshot", "dim_warehouse"],
+    "security_level": "S2"
+  }
+]

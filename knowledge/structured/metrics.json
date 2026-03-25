@@ -1,0 +1,62 @@
+[
+  {
+    "code": "gmv",
+    "name": "GMV",
+    "aliases": ["gmv", "销售额", "营业额", "交易额", "成交额"],
+    "description": "已支付订单的实付金额汇总，用于衡量销售规模。",
+    "formula": "SUM(payment_amount)",
+    "source_tables": ["fct_order_main", "fct_order_item"],
+    "related_dimensions": ["channel_name", "store_name", "series_name", "category_name", "product_name", "brand_name"],
+    "security_level": "S1"
+  },
+  {
+    "code": "net_payment_amount",
+    "name": "净销售额",
+    "aliases": ["净销售额", "净gmv", "净成交额", "净营业额"],
+    "description": "已支付金额扣除成功退款金额后的净收入。",
+    "formula": "SUM(net_payment_amount)",
+    "source_tables": ["fct_order_main"],
+    "related_dimensions": ["channel_name", "store_name", "series_name", "category_name", "product_name"],
+    "security_level": "S1"
+  },
+  {
+    "code": "refund_rate",
+    "name": "退款率",
+    "aliases": ["退款率", "退货率"],
+    "description": "成功退款订单数除以已支付订单数。",
+    "formula": "COUNT(DISTINCT refund_order_id) / COUNT(DISTINCT paid_order_id)",
+    "source_tables": ["fct_refund_main", "fct_refund_item", "fct_order_main", "fct_order_item"],
+    "related_dimensions": ["channel_name", "store_name", "series_name", "category_name", "product_name"],
+    "security_level": "S1"
+  },
+  {
+    "code": "fulfillment_rate",
+    "name": "履约率",
+    "aliases": ["履约率", "完单率"],
+    "description": "已完成订单数占已支付订单数的比例。",
+    "formula": "COUNT(DISTINCT fulfilled_order_id) / COUNT(DISTINCT paid_order_id)",
+    "source_tables": ["fct_order_main"],
+    "related_dimensions": ["channel_name", "store_name", "region_name", "province_name", "city_name"],
+    "security_level": "S1"
+  },
+  {
+    "code": "repeat_purchase_rate",
+    "name": "复购率",
+    "aliases": ["复购率", "回购率"],
+    "description": "时间窗内下单次数大于等于 2 的用户数占支付用户数的比例。",
+    "formula": "repeat_user_count / paid_user_count",
+    "source_tables": ["fct_order_main", "dim_user"],
+    "related_dimensions": ["channel_name", "store_name", "member_level", "region_name"],
+    "security_level": "S2"
+  },
+  {
+    "code": "avg_order_amount",
+    "name": "客单价",
+    "aliases": ["客单价", "平均订单金额", "平均客单价"],
+    "description": "支付金额除以去重订单数。",
+    "formula": "SUM(payment_amount) / COUNT(DISTINCT order_id)",
+    "source_tables": ["fct_order_main", "fct_order_item"],
+    "related_dimensions": ["channel_name", "store_name", "series_name", "category_name", "product_name"],
+    "security_level": "S1"
+  }
+]

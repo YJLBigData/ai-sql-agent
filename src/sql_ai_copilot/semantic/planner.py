@@ -22,6 +22,7 @@ WAREHOUSE_DIMENSION_SQL = {
 }
 
 PRODUCT_DIMENSION_SQL = {
+    "brand_name": ("{alias}.brand_name", "brand_name"),
     "series_name": ("{alias}.series_name", "series_name"),
     "category_name": ("{alias}.category_name", "category_name"),
     "product_name": ("{alias}.product_name", "product_name"),

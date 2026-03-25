@@ -45,6 +45,11 @@ class OpenAICompatibleClient:
             "response_id": getattr(response, "id", None),
             "response_model": getattr(response, "model", payload["model"]),
             "response_text": response.choices[0].message.content or "",
+            "usage": {
+                "prompt_tokens": getattr(getattr(response, "usage", None), "prompt_tokens", 0),
+                "completion_tokens": getattr(getattr(response, "usage", None), "completion_tokens", 0),
+                "total_tokens": getattr(getattr(response, "usage", None), "total_tokens", 0),
+            },
         }
         self.logger.info("llm_response %s", json.dumps(trace, ensure_ascii=False))
         return trace["response_text"], trace

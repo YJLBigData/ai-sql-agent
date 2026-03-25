@@ -20,10 +20,14 @@ from sql_ai_copilot.database.schema_service import SchemaService
 from sql_ai_copilot.database.sql_validator import SQLValidator
 from sql_ai_copilot.knowledge.document_loader import KnowledgeLoader
 from sql_ai_copilot.knowledge.embedding import LocalEmbeddingModel
+from sql_ai_copilot.knowledge.reranker import LocalReranker
 from sql_ai_copilot.knowledge.retriever import LocalRetriever
+from sql_ai_copilot.knowledge.structured_knowledge import StructuredKnowledgeBase
 from sql_ai_copilot.knowledge.vector_store import KnowledgeVectorStore
+from sql_ai_copilot.llm.ollama_client import OllamaClient
 from sql_ai_copilot.llm.openai_compatible_client import OpenAICompatibleClient
 from sql_ai_copilot.logging_utils import get_logger
+from sql_ai_copilot.security.router import SecurityRouter
 from sql_ai_copilot.semantic import DeterministicSQLPlanner, SemanticAnalyzer
 from sql_ai_copilot.sql_meta import SQL_ENGINE_LABELS, TASK_MODE_LABELS, is_query_task, normalize_sql_engine, normalize_task_mode
 
@@ -33,6 +37,12 @@ DOCUMENT_CATEGORY_LABELS = {
     "metrics": "指标口径",
     "business_rules": "业务规则",
     "sql_examples": "SQL样例",
+    "structured_metrics": "结构化指标",
+    "structured_dimensions": "结构化维度",
+    "structured_synonyms": "同义词词典",
+    "structured_relationships": "表关系图谱",
+    "structured_fields": "字段业务释义",
+    "structured_examples": "结构化样例",
 }
 DOCUMENT_TITLE_LABELS = {
     "user": "用户",
@@ -71,9 +81,17 @@ DOCUMENT_TITLE_LABELS = {
 
 
 @lru_cache(maxsize=1)
+def _get_knowledge_base() -> StructuredKnowledgeBase:
+    settings = get_settings()
+    return StructuredKnowledgeBase(settings.knowledge_dir)
+
+
+@lru_cache(maxsize=1)
 def _load_knowledge_documents():
     settings = get_settings()
-    return tuple(KnowledgeLoader(settings.knowledge_dir).load())
+    raw_documents = KnowledgeLoader(settings.knowledge_dir).load()
+    structured_documents = _get_knowledge_base().as_documents()
+    return tuple([*raw_documents, *structured_documents])
 
 
 @lru_cache(maxsize=1)
@@ -86,23 +104,32 @@ def _get_vector_store() -> KnowledgeVectorStore:
 
 @lru_cache(maxsize=1)
 def _get_retriever() -> LocalRetriever:
-    return LocalRetriever(list(_load_knowledge_documents()), vector_store=_get_vector_store())
+    return LocalRetriever(list(_load_knowledge_documents()), vector_store=_get_vector_store(), reranker=LocalReranker())
 
 
 @lru_cache(maxsize=1)
 def _embedding_info() -> dict[str, object]:
-    vector_store = _get_vector_store()
+    settings = get_settings()
+    meta_path = settings.embedding.index_dir / "knowledge_vectors.json"
+    doc_count = 0
+    if meta_path.exists():
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            doc_count = len(payload.get("signatures", {}))
+        except Exception:
+            doc_count = 0
     return {
-        "enabled": vector_store.enabled,
-        "model_name": vector_store.embedding_model.settings.model_name,
-        "disabled_reason": vector_store.embedding_model.disabled_reason,
-        "doc_count": len(vector_store.doc_ids),
+        "enabled": settings.embedding.enabled,
+        "backend": settings.embedding.backend,
+        "model_name": settings.embedding.model_name or settings.embedding.base_url,
+        "disabled_reason": None if settings.embedding.enabled else "本地 embedding 已关闭。",
+        "doc_count": doc_count,
     }
 
 
 @lru_cache(maxsize=1)
 def _get_semantic_analyzer() -> SemanticAnalyzer:
-    return SemanticAnalyzer()
+    return SemanticAnalyzer(_get_knowledge_base())
 
 
 @lru_cache(maxsize=1)
@@ -115,15 +142,24 @@ def _get_llm_client() -> OpenAICompatibleClient:
     return OpenAICompatibleClient(get_settings())
 
 
+@lru_cache(maxsize=1)
+def _get_local_llm_client() -> OllamaClient:
+    settings = get_settings()
+    return OllamaClient(settings.local_llm.base_url, settings.local_llm.default_model)
+
+
 def build_agent(client: MySQLClient) -> SQLCopilot:
     settings = get_settings()
     schema_service = SchemaService(client, settings.mysql.database)
     retriever = _get_retriever()
     validator = SQLValidator(client)
     llm_client = _get_llm_client()
+    local_llm_client = _get_local_llm_client()
     semantic_analyzer = _get_semantic_analyzer()
     planner = _get_planner()
-    return SQLCopilot(client, schema_service, retriever, validator, llm_client, semantic_analyzer, planner)
+    knowledge_base = _get_knowledge_base()
+    security_router = SecurityRouter(knowledge_base)
+    return SQLCopilot(client, schema_service, retriever, validator, llm_client, local_llm_client, semantic_analyzer, planner, security_router, knowledge_base)
 
 
 def create_app() -> Flask:
@@ -146,6 +182,7 @@ def create_app() -> Flask:
 
     @app.get("/api/models")
     def get_models():
+        local_client = _get_local_llm_client()
         catalog = {
             provider_name: {
                 "label": provider.label,
@@ -154,13 +191,27 @@ def create_app() -> Flask:
             }
             for provider_name, provider in settings.providers.items()
         }
+        catalog["local"] = {
+            "label": "本地模型",
+            "default_model": settings.local_llm.default_model,
+            "model_options": local_client.list_models(),
+        }
         return jsonify(
             {
                 "default_provider": settings.default_provider,
                 "providers": catalog,
                 "task_modes": [{"value": key, "label": value} for key, value in TASK_MODE_LABELS.items()],
                 "sql_engines": [{"value": key, "label": value} for key, value in SQL_ENGINE_LABELS.items()],
+                "engine_modes": [
+                    {"value": "single", "label": "单引擎"},
+                    {"value": "dual", "label": "双引擎"},
+                ],
                 "embedding": _embedding_info(),
+                "local_llm": {
+                    "base_url": settings.local_llm.base_url,
+                    "default_model": settings.local_llm.default_model,
+                    "model_options": local_client.list_models(),
+                },
             }
         )
 
@@ -183,13 +234,19 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or {}
         question = (payload.get("question") or "").strip()
         provider_name = payload.get("provider") or settings.default_provider
-        model_name = payload.get("model") or settings.get_provider(provider_name).default_model
+        engine_mode = payload.get("engine_mode") or "single"
+        local_model_name = payload.get("local_model") or settings.local_llm.default_model
+        online_model_name = payload.get("online_model") or payload.get("model") or ""
         execute = bool(payload.get("execute", True))
         requested_task_mode = payload.get("task_mode")
         requested_sql_engine = payload.get("sql_engine") or "mysql"
         if not question:
             return jsonify({"error": "问题不能为空。"}), 400
         try:
+            if provider_name == "local":
+                model_name = payload.get("model") or local_model_name or settings.local_llm.default_model
+            else:
+                model_name = payload.get("model") or settings.get_provider(provider_name).default_model
             normalized_task_mode = normalize_task_mode(requested_task_mode)
             normalized_sql_engine = normalize_sql_engine(requested_sql_engine)
         except ValueError as exc:
@@ -201,6 +258,9 @@ def create_app() -> Flask:
                     "question": question,
                     "provider": provider_name,
                     "model": model_name,
+                    "engine_mode": engine_mode,
+                    "local_model": local_model_name,
+                    "online_model": online_model_name,
                     "execute": execute,
                     "task_mode": normalized_task_mode,
                     "sql_engine": normalized_sql_engine,
@@ -219,6 +279,9 @@ def create_app() -> Flask:
                     execute=execute,
                     task_mode=normalized_task_mode,
                     sql_engine=normalized_sql_engine,
+                    engine_mode=engine_mode,
+                    local_model_name=local_model_name,
+                    online_model_name=online_model_name,
                 )
             logger.info(
                 "api_query_success %s",

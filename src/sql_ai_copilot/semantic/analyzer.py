@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from sql_ai_copilot.knowledge.structured_knowledge import StructuredKnowledgeBase
+
 from .models import SemanticContext
 
 
@@ -13,41 +15,42 @@ class KeywordSpec:
 
 
 METRIC_SPECS = (
-    KeywordSpec("avg_order_amount", ("客单价",)),
-    KeywordSpec("repeat_purchase_rate", ("复购率",)),
-    KeywordSpec("repeat_user_count", ("复购人数", "复购用户数", "复购会员数")),
-    KeywordSpec("fulfillment_rate", ("履约率",)),
-    KeywordSpec("avg_fulfillment_hours", ("平均履约时长", "履约时长", "履约耗时")),
-    KeywordSpec("available_qty", ("可用库存",)),
-    KeywordSpec("reserved_qty", ("预占库存", "锁定库存")),
-    KeywordSpec("stockout_rate", ("缺货率", "缺货")),
-    KeywordSpec("inventory_amount", ("库存金额", "库存货值")),
-    KeywordSpec("inventory_qty", ("库存总量", "总库存", "库存量", "账面库存", "现有库存")),
-    KeywordSpec("inbound_qty", ("入库量", "入库数")),
-    KeywordSpec("outbound_qty", ("出库量", "出库数")),
+    KeywordSpec("avg_order_amount", ("avg_order_amount", "客单价")),
+    KeywordSpec("repeat_purchase_rate", ("repeat_purchase_rate", "复购率")),
+    KeywordSpec("repeat_user_count", ("repeat_user_count", "复购人数", "复购用户数", "复购会员数")),
+    KeywordSpec("fulfillment_rate", ("fulfillment_rate", "履约率")),
+    KeywordSpec("avg_fulfillment_hours", ("avg_fulfillment_hours", "平均履约时长", "履约时长", "履约耗时")),
+    KeywordSpec("available_qty", ("available_qty", "可用库存")),
+    KeywordSpec("reserved_qty", ("reserved_qty", "预占库存", "锁定库存")),
+    KeywordSpec("stockout_rate", ("stockout_rate", "缺货率", "缺货")),
+    KeywordSpec("inventory_amount", ("inventory_amount", "库存金额", "库存货值")),
+    KeywordSpec("inventory_qty", ("inventory_qty", "库存总量", "总库存", "库存量", "账面库存", "现有库存")),
+    KeywordSpec("inbound_qty", ("inbound_qty", "入库量", "入库数")),
+    KeywordSpec("outbound_qty", ("outbound_qty", "出库量", "出库数")),
     KeywordSpec("gmv", ("gmv", "销售额", "交易额", "成交额")),
-    KeywordSpec("order_count", ("订单量", "订单数", "单量")),
-    KeywordSpec("refund_amount", ("退款金额", "退款额")),
-    KeywordSpec("refund_rate", ("退款率",)),
-    KeywordSpec("net_payment_amount", ("净销售额", "净gmv", "净成交额")),
+    KeywordSpec("order_count", ("order_count", "订单量", "订单数", "单量")),
+    KeywordSpec("refund_amount", ("refund_amount", "退款金额", "退款额")),
+    KeywordSpec("refund_rate", ("refund_rate", "退款率")),
+    KeywordSpec("net_payment_amount", ("net_payment_amount", "净销售额", "净gmv", "净成交额")),
 )
 
 DIMENSION_SPECS = (
-    KeywordSpec("channel_name", ("渠道",)),
-    KeywordSpec("store_name", ("门店", "店铺")),
-    KeywordSpec("warehouse_name", ("仓库",)),
-    KeywordSpec("warehouse_type", ("仓型", "仓库类型")),
-    KeywordSpec("region_name", ("大区",)),
-    KeywordSpec("province_name", ("省份",)),
-    KeywordSpec("city_name", ("城市",)),
-    KeywordSpec("series_name", ("系列",)),
-    KeywordSpec("category_name", ("类目", "品类")),
-    KeywordSpec("product_name", ("商品", "sku", "产品")),
+    KeywordSpec("channel_name", ("channel_name", "渠道")),
+    KeywordSpec("store_name", ("store_name", "门店", "店铺")),
+    KeywordSpec("warehouse_name", ("warehouse_name", "仓库")),
+    KeywordSpec("warehouse_type", ("warehouse_type", "仓型", "仓库类型")),
+    KeywordSpec("region_name", ("region_name", "大区")),
+    KeywordSpec("province_name", ("province_name", "省份")),
+    KeywordSpec("city_name", ("city_name", "城市")),
+    KeywordSpec("series_name", ("series_name", "系列")),
+    KeywordSpec("category_name", ("category_name", "类目", "品类")),
+    KeywordSpec("brand_name", ("brand_name", "品牌", "品牌名称")),
+    KeywordSpec("product_name", ("product_name", "商品", "sku", "产品")),
 )
 
 STORE_DIMENSIONS = {"channel_name", "store_name", "region_name", "province_name", "city_name"}
 WAREHOUSE_DIMENSIONS = {"warehouse_name", "warehouse_type", "region_name", "province_name", "city_name"}
-PRODUCT_DIMENSIONS = {"series_name", "category_name", "product_name"}
+PRODUCT_DIMENSIONS = {"brand_name", "series_name", "category_name", "product_name"}
 INVENTORY_DIMENSIONS = WAREHOUSE_DIMENSIONS | PRODUCT_DIMENSIONS
 
 SUPPORTED_TEMPLATE_METRICS = {
@@ -85,23 +88,36 @@ UNSAFE_TEMPLATE_HINTS = (
 
 
 class SemanticAnalyzer:
+    def __init__(self, knowledge_base: StructuredKnowledgeBase | None = None) -> None:
+        self.knowledge_base = knowledge_base
+
     def analyze(self, question: str, task_mode: str, sql_engine: str) -> SemanticContext:
-        metrics = self._detect_keywords(question, METRIC_SPECS)
-        dimensions = self._detect_keywords(question, DIMENSION_SPECS)
-        topic = self._detect_topic(question, metrics)
-        metrics = self._normalize_metrics(question, metrics, topic)
-        compare_mode = self._detect_compare_mode(question)
-        time_grain = self._detect_time_grain(question)
-        time_window, time_window_value = self._detect_time_window(question)
-        limit = self._detect_limit(question)
-        sort_metric, sort_desc = self._detect_sort(question, metrics)
+        summary = self.knowledge_base.normalize_question(question) if self.knowledge_base else None
+        normalized_question = summary.normalized_question if summary else question
+        matched_synonyms = summary.matched_synonyms if summary else ()
+
+        metrics = self._merge_detected_values(
+            self._detect_keywords(normalized_question, METRIC_SPECS),
+            self.knowledge_base.detect_metric_aliases(normalized_question) if self.knowledge_base else (),
+        )
+        dimensions = self._merge_detected_values(
+            self._detect_keywords(normalized_question, DIMENSION_SPECS),
+            self.knowledge_base.detect_dimension_aliases(normalized_question) if self.knowledge_base else (),
+        )
+        topic = self._detect_topic(normalized_question, metrics)
+        metrics = self._normalize_metrics(normalized_question, metrics, topic)
+        compare_mode = self._detect_compare_mode(normalized_question)
+        time_grain = self._detect_time_grain(normalized_question)
+        time_window, time_window_value = self._detect_time_window(normalized_question)
+        limit = self._detect_limit(normalized_question)
+        sort_metric, sort_desc = self._detect_sort(normalized_question, metrics)
         metric_family = self._detect_metric_family(dimensions, topic)
-        requested_tables = self._resolve_tables(question, metrics, dimensions, metric_family, topic)
+        requested_tables = self._resolve_tables(normalized_question, metrics, dimensions, metric_family, topic)
         relevant_columns = self._resolve_columns(metrics, dimensions, metric_family, time_grain, topic)
         hints = self._build_hints(metrics, dimensions, time_grain, time_window, metric_family, compare_mode, topic)
-        notes = self._build_notes(question, metrics, dimensions, metric_family, compare_mode, topic)
+        notes = self._build_notes(normalized_question, metrics, dimensions, metric_family, compare_mode, topic)
         route, route_reason = self._resolve_route(
-            question,
+            normalized_question,
             task_mode,
             sql_engine,
             metrics,
@@ -115,6 +131,7 @@ class SemanticAnalyzer:
 
         return SemanticContext(
             question=question,
+            normalized_question=normalized_question,
             metrics=metrics,
             dimensions=dimensions,
             time_grain=time_grain,
@@ -132,7 +149,12 @@ class SemanticAnalyzer:
             notes=notes,
             route=route,
             route_reason=route_reason,
+            matched_synonyms=matched_synonyms,
         )
+
+    @staticmethod
+    def _merge_detected_values(primary: tuple[str, ...], secondary: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys([*primary, *secondary]))
 
     def _detect_keywords(self, question: str, specs: tuple[KeywordSpec, ...]) -> tuple[str, ...]:
         lowered = question.lower()
@@ -305,6 +327,7 @@ class SemanticAnalyzer:
                     "snapshot_date",
                     "warehouse_id",
                     "product_id",
+                    "brand_name",
                     "series_name",
                     "category_name",
                     "product_name",
@@ -319,6 +342,7 @@ class SemanticAnalyzer:
                     "flow_date",
                     "warehouse_id",
                     "product_id",
+                    "brand_name",
                     "series_name",
                     "category_name",
                     "product_name",
@@ -345,10 +369,10 @@ class SemanticAnalyzer:
 
         if metric_family == "product":
             if any(metric in metrics for metric in ("gmv", "order_count", "net_payment_amount", "avg_order_amount", "repeat_purchase_rate", "repeat_user_count", "refund_rate")):
-                columns["fct_order_item"] = ["order_id", "pay_amount", "refunded_amount", "series_name", "category_name", "product_name"]
+                columns["fct_order_item"] = ["order_id", "pay_amount", "refunded_amount", "brand_name", "series_name", "category_name", "product_name"]
                 columns["fct_order_main"] = ["order_id", "user_id", "order_date", "pay_status", "payment_amount", "net_payment_amount"]
             if any(metric in metrics for metric in ("refund_amount", "refund_rate")):
-                columns["fct_refund_item"] = ["refund_id", "order_id", "refund_amount", "series_name", "category_name", "product_name"]
+                columns["fct_refund_item"] = ["refund_id", "order_id", "refund_amount", "brand_name", "series_name", "category_name", "product_name"]
                 columns["fct_refund_main"] = ["refund_id", "order_id", "refund_date", "refund_status", "refund_amount"]
         else:
             if any(metric in metrics for metric in ("gmv", "order_count", "net_payment_amount", "avg_order_amount", "repeat_purchase_rate", "repeat_user_count", "refund_rate")):

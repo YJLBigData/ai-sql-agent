@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from .models import KnowledgeDocument
 from .retriever import tokenize
@@ -27,7 +28,30 @@ class KnowledgeLoader:
                     path=file_path,
                     content=content,
                     tokens=tuple(tokenize(content)),
+                    metadata=self._infer_metadata(category, file_path.stem, content),
+                    security_level=self._infer_security_level(category),
                 )
             )
         return documents
 
+    @staticmethod
+    def _infer_security_level(category: str) -> str:
+        if category == "business_rules":
+            return "S2"
+        if category in {"schema_docs", "sql_examples"}:
+            return "S1"
+        return "S1"
+
+    @staticmethod
+    def _infer_metadata(category: str, title: str, content: str) -> dict[str, object]:
+        tables = sorted(set(re.findall(r"\b(?:dim|fct)_[a-z0-9_]+\b", content)))
+        metadata: dict[str, object] = {
+            "kind": category.rstrip("s"),
+            "tables": tables,
+            "title": title,
+        }
+        if category == "metrics":
+            metadata["metrics"] = [title]
+        if category == "sql_examples":
+            metadata["kind"] = "sql_example"
+        return metadata

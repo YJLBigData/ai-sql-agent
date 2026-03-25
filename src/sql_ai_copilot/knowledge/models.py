@@ -12,4 +12,5 @@ class KnowledgeDocument:
     path: Path
     content: str
     tokens: tuple[str, ...] = field(default_factory=tuple)
-
+    metadata: dict[str, object] = field(default_factory=dict)
+    security_level: str = "S1"
